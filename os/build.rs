@@ -38,6 +38,18 @@ _num_app:
     }
     writeln!(f, r#"    .quad app_{}_end"#, apps.len() - 1)?;
 
+    writeln!(
+        f,
+        r#"
+    .align 3
+    .section .data
+    .global _app_names
+_app_names:"#
+    )?;
+    for i in 0..apps.len() {
+        writeln!(f, r#"    .quad app_{}_name"#, i)?;
+    }
+
     for (idx, app) in apps.iter().enumerate() {
         println!("app_{}: {}", idx, app);
         writeln!(
@@ -50,6 +62,14 @@ app_{0}_start:
     .incbin "{2}{1}.bin"
 app_{0}_end:"#,
             idx, app, TARGET_PATH
+        )?;
+        writeln!(
+            f,
+            r#"
+    .section .rodata
+app_{0}_name:
+    .asciz "{1}""#,
+            idx, app
         )?;
     }
     Ok(())

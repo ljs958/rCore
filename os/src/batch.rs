@@ -1,9 +1,11 @@
 //! batch subsystem
 
 use crate::sbi::shutdown;
+use crate::syscall::print_syscall_stats;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use core::arch::asm;
+use core::ffi::{CStr, c_char};
 use lazy_static::*;
 
 const USER_STACK_SIZE: usize = 4096 * 2;
@@ -48,11 +50,24 @@ impl UserStack {
     }
 }
 
+/// user app memory range [base, end)
+pub fn app_memory_range() -> (usize, usize) {
+    (APP_BASE_ADDRESS, APP_BASE_ADDRESS + APP_SIZE_LIMIT)
+}
+
+/// user stack memory range [base, end)
+pub fn user_stack_range() -> (usize, usize) {
+    let base = USER_STACK.data.as_ptr() as usize;
+    (base, base + USER_STACK_SIZE)
+}
+
 struct AppManager {
     num_app: usize,
     current_app: usize,
     app_start: [usize; MAX_APP_NUM + 1],
+    app_names: [usize; MAX_APP_NUM],
 }
+
 
 impl AppManager {
     pub fn print_app_info(&self) {
@@ -70,6 +85,7 @@ impl AppManager {
     fn load_app(&self, app_id: usize) {
         if app_id >= self.num_app {
             println!("All applications completed!");
+            print_syscall_stats();
             shutdown(false);
         }
         println!("[kernel] Loading app_{}", app_id);
@@ -107,6 +123,7 @@ lazy_static! {
         UPSafeCell::new({
             unsafe extern "C" {
                 safe fn _num_app();
+                safe fn _app_names();
             }
             let num_app_ptr = _num_app as usize as *const usize;
             let num_app = num_app_ptr.read_volatile();
@@ -114,10 +131,17 @@ lazy_static! {
             let app_start_raw: &[usize] =
                 core::slice::from_raw_parts(num_app_ptr.add(1), num_app + 1);
             app_start[..=num_app].copy_from_slice(app_start_raw);
+            let mut app_names: [usize; MAX_APP_NUM] = [0; MAX_APP_NUM];
+            let app_names_ptr = _app_names as usize as *const usize;
+            let app_names_raw: &[usize] = core::slice::from_raw_parts(app_names_ptr, num_app);
+            for (i, ptr) in app_names_raw.iter().enumerate() {
+                app_names[i] = *ptr;
+            }
             AppManager {
                 num_app,
                 current_app: 0,
                 app_start,
+                app_names,
             }
         })
     };
@@ -152,4 +176,22 @@ pub fn run_next_app() -> ! {
         )) as *const _ as usize);
     }
     panic!("Unreachable in batch::run_current_app!");
+}
+
+/// get current task id and name
+pub fn current_task_info() -> (usize, &'static str) {
+    let app_manager = APP_MANAGER.exclusive_access();
+    let app_id = app_manager.current_app.saturating_sub(1);
+    let name_addr = app_manager.app_names[app_id];
+    drop(app_manager);
+    let name = unsafe {
+        if name_addr == 0 {
+            "unknown"
+        } else {
+            CStr::from_ptr(name_addr as *const c_char)
+                .to_str()
+                .unwrap_or("unknown")
+        }
+    };
+    (app_id, name)
 }

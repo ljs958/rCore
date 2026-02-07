@@ -38,3 +38,15 @@ pub fn write(fd: usize, buf: &[u8]) -> isize {
 pub fn exit(exit_code: i32) -> isize {
     sys_exit(exit_code)
 }
+
+pub const TASK_NAME_LEN: usize = 32;
+
+#[repr(C)]
+pub struct TaskInfo {
+    pub id: usize,
+    pub name: [u8; TASK_NAME_LEN],
+}
+
+pub fn get_taskinfo(taskinfo: &mut TaskInfo) -> isize {
+    sys_get_taskinfo(taskinfo as *mut TaskInfo)
+}

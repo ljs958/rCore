@@ -26,6 +26,7 @@ use log::*;
 mod console;
 pub mod batch;
 mod lang_items;
+mod stack_trace;
 mod logging;
 mod sbi;
 mod sync;

@@ -35,6 +35,18 @@ pub fn init() {
     }
 }
 
+fn print_exception_info(scause: Trap, sepc: usize, stval: usize) {
+    println!(
+        "[kernel] Exception: {:?}, sepc={:#x}, stval={:#x}",
+        scause, sepc, stval
+    );
+
+    // 尝试读取出错指令
+    let inst = unsafe { (sepc as *const u32).read_volatile() };
+    println!("[kernel] Faulting instruction: 0x{:08x}", inst);
+}
+
+
 #[unsafe(no_mangle)]
 /// handle an interrupt, exception, or system call from user space
 pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
@@ -46,10 +58,12 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
             cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
         }
         Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) => {
+            print_exception_info(scause.cause(), cx.sepc, stval);
             println!("[kernel] PageFault in application, kernel killed it.");
             run_next_app();
         }
         Trap::Exception(Exception::IllegalInstruction) => {
+            print_exception_info(scause.cause(), cx.sepc, stval);
             println!("[kernel] IllegalInstruction in application, kernel killed it.");
             run_next_app();
         }
