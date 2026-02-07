@@ -8,7 +8,7 @@ use core::arch::asm;
 use core::ffi::{CStr, c_char};
 use lazy_static::*;
 
-const USER_STACK_SIZE: usize = 4096 * 2;
+const USER_STACK_SIZE: usize = 4096;
 const KERNEL_STACK_SIZE: usize = 4096 * 2;
 const MAX_APP_NUM: usize = 16;
 const APP_BASE_ADDRESS: usize = 0x80400000;
