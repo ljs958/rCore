@@ -15,10 +15,11 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM };
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sbi::shutdown;
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 use task::{TaskControlBlock, TaskStatus};
@@ -47,6 +48,22 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    //  last stop time of current task, used to calculate user time and kernel time
+    stop_time: usize,
+}
+
+/// 系统调用信息结构体
+pub struct SyscallInfo {
+    id: usize,
+    times: usize
+}
+
+/// 任务信息结构体
+pub struct TaskInfo {
+    id: usize,
+    status: TaskStatus,
+    call: [SyscallInfo; MAX_SYSCALL_NUM],
+    time: usize
 }
 
 lazy_static! {
@@ -56,6 +73,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            user_time: 0,
+            kernel_time: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -67,6 +86,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    stop_time: 0,
                 })
             },
         }
@@ -83,6 +103,7 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        inner.refresh_stop_watch();
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -96,6 +117,7 @@ impl TaskManager {
     fn mark_current_suspended(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
+        inner.tasks[current].kernel_time += inner.refresh_stop_watch();
         inner.tasks[current].task_status = TaskStatus::Ready;
     }
 
@@ -103,6 +125,9 @@ impl TaskManager {
     fn mark_current_exited(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
+        inner.tasks[current].kernel_time += inner.refresh_stop_watch();
+        println!("Task {} exited! User time: {} ms, Kernel time: {} ms",
+            current, inner.tasks[current].user_time, inner.tasks[current].kernel_time);
         inner.tasks[current].task_status = TaskStatus::Exited;
     }
 
@@ -127,6 +152,7 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            //println!("Switching from task {} to task {}", current, next);
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -138,7 +164,32 @@ impl TaskManager {
             shutdown(false);
         }
     }
+
+    /// 统计内核时间，从现在开始算的是用户时间
+    fn user_time_start(&self) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].kernel_time += inner.refresh_stop_watch();
+    }
+
+    /// 统计用户时间，从现在开始算的是内核时间
+    fn user_time_end(&self) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].user_time += inner.refresh_stop_watch();
+    }
+
 }
+
+impl TaskManagerInner{
+    /// Refresh stop watch and return the time duration since last refresh.
+    fn refresh_stop_watch(&mut self) -> usize {
+        let start_time = self.stop_time;
+        self.stop_time = get_time_ms();
+        self.stop_time - start_time
+    }
+}
+
 
 /// run first task
 pub fn run_first_task() {
@@ -170,4 +221,14 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// 统计内核时间，从现在开始算的是用户时间
+pub fn user_time_start() {
+    TASK_MANAGER.user_time_start()
+}
+
+/// 统计用户时间，从现在开始算的是内核时间
+pub fn user_time_end() {
+    TASK_MANAGER.user_time_end()
 }
