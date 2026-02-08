@@ -1,5 +1,5 @@
 //! Process management syscalls
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next , TaskInfo};
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next , TaskInfo , get_task_info};
 use crate::timer::get_time_ms;
 
 /// task exits and submit an exit code
@@ -22,5 +22,14 @@ pub fn sys_get_time() -> isize {
 
 /// 获取任务信息
 pub fn sys_task_info(id: usize, ts: *mut TaskInfo) -> isize{
-
+    let info = get_task_info(id);
+    match info {
+        None => -1,
+        Some(info) => {
+            unsafe {
+                *ts = info;
+            }
+            0
+        }
+    }
 }

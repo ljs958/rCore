@@ -32,6 +32,33 @@ fn clear_bss() {
 
 use syscall::*;
 
+pub const MAX_SYSCALL_NUM: usize = 5;
+
+#[repr(usize)]
+#[derive(Copy, Clone, PartialEq)]
+pub enum TaskStatus {
+    UnInit,
+    Ready,
+    Running,
+    Exited,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SyscallInfo {
+    pub id: usize,
+    pub times: usize,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct TaskInfo {
+    pub id: usize,
+    pub status: TaskStatus,
+    pub call: [SyscallInfo; MAX_SYSCALL_NUM],
+    pub time: usize,
+}
+
 pub fn write(fd: usize, buf: &[u8]) -> isize {
     sys_write(fd, buf)
 }
@@ -43,4 +70,7 @@ pub fn yield_() -> isize {
 }
 pub fn get_time() -> isize {
     sys_get_time()
+}
+pub fn get_task_info(id: usize, ts: *mut TaskInfo) -> isize {
+    sys_task_info(id, ts)
 }

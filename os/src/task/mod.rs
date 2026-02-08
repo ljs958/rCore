@@ -22,7 +22,7 @@ use crate::sync::UPSafeCell;
 use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
-use task::{TaskControlBlock, TaskStatus};
+use task::{TaskControlBlock, TaskStatus , SyscallInfo};
 
 pub use context::TaskContext;
 
@@ -52,18 +52,18 @@ pub struct TaskManagerInner {
     stop_time: usize,
 }
 
-/// 系统调用信息结构体
-pub struct SyscallInfo {
-    id: usize,
-    times: usize
-}
-
-/// 任务信息结构体
+/// 记录任务信息的结构体
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct TaskInfo {
-    id: usize,
-    status: TaskStatus,
-    call: [SyscallInfo; MAX_SYSCALL_NUM],
-    time: usize
+    /// task id
+    pub id: usize,
+    /// task status
+    pub status: TaskStatus,
+    /// syscall statistics
+    pub call: [SyscallInfo; MAX_SYSCALL_NUM],
+    /// total running time in ms
+    pub time: usize,
 }
 
 lazy_static! {
@@ -75,6 +75,7 @@ lazy_static! {
             task_status: TaskStatus::UnInit,
             user_time: 0,
             kernel_time: 0,
+            call: [SyscallInfo { id: 0, times: 0 }; MAX_SYSCALL_NUM]
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -179,6 +180,42 @@ impl TaskManager {
         inner.tasks[current].user_time += inner.refresh_stop_watch();
     }
 
+    /// 记录系统调用次数
+    fn get_syscall_time(&self , id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        for i in 0..MAX_SYSCALL_NUM {
+            if inner.tasks[current].call[i].id == id {
+                inner.tasks[current].call[i].times += 1;
+                return;
+            }
+        }
+        for i in 0..MAX_SYSCALL_NUM {
+            if inner.tasks[current].call[i].id == 0 {
+                inner.tasks[current].call[i].id = id;
+                inner.tasks[current].call[i].times = 1;
+                return;
+            }
+        }
+    }
+
+    /// 获取任务信息
+    fn get_task_info(&self , id: usize) -> Option<TaskInfo>{
+        let inner = self.inner.exclusive_access();
+        if id >= self.num_app {
+            return None;
+        }
+        else {
+            let task = &inner.tasks[id];
+            Some(TaskInfo {
+                id,
+                status: task.task_status,
+                call: task.call,
+                time: task.user_time + task.kernel_time
+            })
+        }
+    }
+
 }
 
 impl TaskManagerInner{
@@ -231,4 +268,14 @@ pub fn user_time_start() {
 /// 统计用户时间，从现在开始算的是内核时间
 pub fn user_time_end() {
     TASK_MANAGER.user_time_end()
+}
+
+/// 记录系统调用次数
+pub fn get_syscall_time(id: usize) {
+    TASK_MANAGER.get_syscall_time(id);
+}
+
+/// 获取任务信息
+pub fn get_task_info(id: usize) -> Option<TaskInfo> {
+    TASK_MANAGER.get_task_info(id)
 }
