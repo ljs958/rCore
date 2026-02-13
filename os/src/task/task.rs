@@ -14,6 +14,8 @@ pub struct TaskControlBlock {
     pub base_size: usize,
     pub heap_bottom: usize,
     pub program_brk: usize,
+    pub stride: usize,
+    pub priority: usize,
 }
 
 impl TaskControlBlock {
@@ -46,6 +48,8 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            stride: 0,
+            priority: 16,
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();

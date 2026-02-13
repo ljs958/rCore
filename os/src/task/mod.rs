@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sbi::shutdown;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
@@ -24,6 +25,7 @@ use switch::__switch;
 use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+const BIG_STRIDE: usize = 0x7fff_ffff;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -110,9 +112,21 @@ impl TaskManager {
     fn find_next_task(&self) -> Option<usize> {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        (current + 1..current + self.num_app + 1)
-            .map(|id| id % self.num_app)
-            .find(|id| inner.tasks[*id].task_status == TaskStatus::Ready)
+        let mut next: Option<usize> = None;
+        for id in (current + 1..current + self.num_app + 1).map(|id| id % self.num_app) {
+            if inner.tasks[id].task_status != TaskStatus::Ready {
+                continue;
+            }
+            match next {
+                None => next = Some(id),
+                Some(best) => {
+                    if inner.tasks[id].stride < inner.tasks[best].stride {
+                        next = Some(id);
+                    }
+                }
+            }
+        }
+        next
     }
 
     /// Get the current 'Running' task's token.
@@ -133,6 +147,32 @@ impl TaskManager {
         let cur = inner.current_task;
         inner.tasks[cur].change_program_brk(size)
     }
+    /// Set priority for the current running task.
+    pub fn set_current_priority(&self, priority: isize) -> isize {
+        if priority <= 1 {
+            return -1;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].priority = priority as usize;
+        priority
+    }
+    /// Map memory for the current running task.
+    pub fn mmap_current(&self, start: usize, len: usize, perm: MapPermission) -> Result<(), ()> {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur]
+            .memory_set
+            .mmap(VirtAddr(start), len, perm)
+    }
+    /// Unmap memory for the current running task.
+    pub fn munmap_current(&self, start: usize, len: usize) -> Result<(), ()> {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur]
+            .memory_set
+            .munmap(VirtAddr(start), len)
+    }
 
     /// Switch current `Running` task to the task we have found,
     /// or there is no `Ready` task and we can exit with all applications completed
@@ -141,6 +181,8 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            let stride_delta = BIG_STRIDE / inner.tasks[next].priority.max(2);
+            inner.tasks[next].stride = inner.tasks[next].stride.saturating_add(stride_delta.max(1));
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -203,4 +245,19 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Set priority for the current running task.
+pub fn set_current_priority(priority: isize) -> isize {
+    TASK_MANAGER.set_current_priority(priority)
+}
+
+/// Map memory for the current running task.
+pub fn mmap(start: usize, len: usize, perm: MapPermission) -> Result<(), ()> {
+    TASK_MANAGER.mmap_current(start, len, perm)
+}
+
+/// Unmap memory for the current running task.
+pub fn munmap(start: usize, len: usize) -> Result<(), ()> {
+    TASK_MANAGER.munmap_current(start, len)
 }

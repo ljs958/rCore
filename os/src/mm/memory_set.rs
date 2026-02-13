@@ -240,6 +240,86 @@ impl MemorySet {
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
     }
+    pub fn mmap(
+        &mut self,
+        start: VirtAddr,
+        len: usize,
+        permission: MapPermission,
+    ) -> Result<(), ()> {
+        if len == 0 {
+            return Ok(());
+        }
+        let len_rounded = (len + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
+        let end = start.0.checked_add(len_rounded).ok_or(())?;
+        let start_vpn = start.floor();
+        let end_vpn = VirtAddr::from(end).ceil();
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            if let Some(pte) = self.page_table.translate(vpn) {
+                if pte.is_valid() {
+                    return Err(());
+                }
+            }
+        }
+        let mut area = MapArea::new(start, VirtAddr::from(end), MapType::Framed, permission);
+        let pte_flags = PTEFlags::from_bits(permission.bits).unwrap();
+        for vpn in area.vpn_range {
+            let frame = frame_alloc().ok_or(())?;
+            let ppn = frame.ppn;
+            area.data_frames.insert(vpn, frame);
+            self.page_table.map(vpn, ppn, pte_flags);
+        }
+        self.areas.push(area);
+        Ok(())
+    }
+    pub fn munmap(&mut self, start: VirtAddr, len: usize) -> Result<(), ()> {
+        if len == 0 {
+            return Ok(());
+        }
+        let len_rounded = (len + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
+        let end = start.0.checked_add(len_rounded).ok_or(())?;
+        let start_vpn = start.floor();
+        let end_vpn = VirtAddr::from(end).ceil();
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            match self.page_table.translate(vpn) {
+                Some(pte) if pte.is_valid() => {}
+                _ => return Err(()),
+            }
+        }
+        let mut new_areas: Vec<MapArea> = Vec::new();
+        for mut area in self.areas.drain(..) {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            if end_vpn <= area_start || start_vpn >= area_end {
+                new_areas.push(area);
+                continue;
+            }
+            let unmap_start = if start_vpn > area_start { start_vpn } else { area_start };
+            let unmap_end = if end_vpn < area_end { end_vpn } else { area_end };
+            for vpn in VPNRange::new(unmap_start, unmap_end) {
+                area.unmap_one(&mut self.page_table, vpn);
+            }
+            let mut right_frames = area.data_frames.split_off(&unmap_start);
+            let _mid_frames = right_frames.split_off(&unmap_end);
+            if area_start < unmap_start {
+                new_areas.push(MapArea {
+                    vpn_range: VPNRange::new(area_start, unmap_start),
+                    data_frames: area.data_frames,
+                    map_type: area.map_type,
+                    map_perm: area.map_perm,
+                });
+            }
+            if unmap_end < area_end {
+                new_areas.push(MapArea {
+                    vpn_range: VPNRange::new(unmap_end, area_end),
+                    data_frames: right_frames,
+                    map_type: area.map_type,
+                    map_perm: area.map_perm,
+                });
+            }
+        }
+        self.areas = new_areas;
+        Ok(())
+    }
     #[allow(unused)]
     pub fn shrink_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
         if let Some(area) = self

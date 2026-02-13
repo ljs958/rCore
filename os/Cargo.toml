@@ -15,5 +15,9 @@ xmas-elf = "0.7.0"
 log = "0.4"
 sbi-rt = { version = "0.0.2", features = ["legacy"] }
 
+[features]
+default = ["board_qemu"]
+board_qemu = []
+
 [profile.release]
 debug = true
